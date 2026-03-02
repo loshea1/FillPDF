@@ -1,0 +1,5 @@
+# Ignore specific project files
+AmpakineBaselineLowe-BladderDiary_DATA_LABELS_2026-02-24_1510.csv
+BladderDiary.py
+FillPDF.py
+NIHdiary.pdf
