@@ -1,7 +1,7 @@
-"Record ID","Event Name","Repeat Instrument","Repeat Instance","Date of Diary ",Hour:,"AM or PM","What kind of drink? (i.e. juice, water, milk, etc.)","How much was drank (in oz)? ","How many times did you use the bathroom?","How much urine?","Accidental Leaks How much urine?","Did you feel a strong urge to go?","What were you doing at the time?(i.e. sneezing, lifting, arriving home, sleeping, etc.)"
-1,"Follow-up 2",,,,,,,,,,,,
-1,"Follow-up 2","Bladder Diary",1,2026-02-23,"'5 - 6",AM,water,8,3,Small,NA,No,"running "
-1,"Follow-up 2","Bladder Diary",2,2026-02-23,"'12 - 1",AM,water,8,2,Medium,Small,No,running
-1,"Follow-up 2","Bladder Diary",3,2026-02-23,"'9 - 10",AM,water,0,1,Small,NA,No,"sitting "
-1,"Follow-up 2","Bladder Diary",4,2026-02-24,"'5 - 6",PM,water,8,2,Medium,NA,No,sneezing
-1,"Follow-up 2","Bladder Diary",5,2026-02-24,"'4 - 5",PM,water,8,3,Large,Large,No,"sneezing "
+"Record ID","Event Name","Repeat Instrument","Repeat Instance","Date of Diary ",Hour:,"AM or PM","What kind of drink? (i.e. juice, water, milk, etc.)","How much was drank (in oz)? ","How many times did you use the bathroom?","How much urine?","Accidental Leaks How much urine?","Did you feel a strong urge to go?","What were you doing at the time?(i.e. sneezing, lifting, arriving home, sleeping, etc.)","How many pads were used this day?","How many diapers were used this day?","Questions to ask my healthcare team:"
+1,"Follow-up 2",,,,,,,,,,,,,,,
+1,"Follow-up 2","Bladder Diary",1,2026-02-23,"'5 - 6",AM,water,8,3,Small,NA,No,"running ",,,
+1,"Follow-up 2","Bladder Diary",2,2026-02-23,"'12 - 1",AM,water,8,2,Medium,Small,No,running,0,1,
+1,"Follow-up 2","Bladder Diary",3,2026-02-23,"'9 - 10",AM,water,0,1,Small,NA,No,"sitting ",,,
+1,"Follow-up 2","Bladder Diary",4,2026-02-24,"'5 - 6",PM,water,8,2,Medium,NA,No,sneezing,,,
+1,"Follow-up 2","Bladder Diary",5,2026-02-24,"'4 - 5",PM,water,8,3,Large,Large,No,"sneezing ",1,2,"how many days do I have to do this. this is so boring and it doesn't even accurately track my voiding. "
