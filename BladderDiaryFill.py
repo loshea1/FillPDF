@@ -1,153 +1,158 @@
-import pandas as pd
+import os
 import re
+import pandas as pd
 from pdfrw import PdfReader, PdfWriter, PdfName, PdfDict, PdfObject
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename, asksaveasfilename
-import os
 
-################### THIS SECTION OF THE CODE CONVERTS THE CSV FILE DOWNLOADED FROM REDCAP TO ONE THAT CAN BE READ INTO THE PDF #############
-# --- Select RAW CSV File ---
-Tk().withdraw()  # Hide the root window
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def split_text_for_pdf(text, max_len=100):
+    """Split text into up to 3 word-boundary chunks for PDF fields."""
+    chunks, remaining = [], text.strip()
+    for _ in range(3):
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            remaining = ""
+        else:
+            pos = remaining.rfind(" ", 0, max_len)
+            pos = pos if pos != -1 else max_len
+            chunks.append(remaining[:pos].rstrip())
+            remaining = remaining[pos:].lstrip()
+    return (chunks + ["", "", ""])[:3]
+
+
+def time_to_24hr_code(time_str):
+    """Convert '9-10 AM' style string to a 4-digit code like '0910'."""
+    m = re.match(r"(\d+)\s*-\s*(\d+)\s*(AM|PM)", time_str.strip(), re.IGNORECASE)
+    if not m:
+        return None
+    start, end, period = int(m[1]), int(m[2]), m[3].upper()
+    if period == "AM":
+        start = 0 if start == 12 else start
+        end   = 0 if end   == 12 else end
+    else:
+        start = start if start == 12 else start + 12
+        end   = end   if end   == 12 else end   + 12
+    return f"{start:02d}{end:02d}"
+
+
+def set_radio_group(pdf, field_name, value):
+    """Set a radio button group value across all pages."""
+    export = PdfName(value)
+    for page in pdf.pages:
+        for annot in page.Annots or []:
+            if annot.Parent and annot.Parent.T and annot.Parent.T[1:-1] == field_name:
+                annot.Parent.V = export
+                annot.AS = export
+
+
+def clean_numeric(val):
+    """Return whole numbers without decimals (8.0 → '8'), pass floats through, blank otherwise."""
+    try:
+        f = float(val)
+        return str(int(f)) if f == int(f) else str(f)
+    except (ValueError, TypeError):
+        return ""
+
+
+# ── Load & prepare CSV ────────────────────────────────────────────────────────
+
+Tk().withdraw()
 file_path = askopenfilename(title="Select Bladder Diary CSV File", filetypes=[("CSV files", "*.csv")])
 if not file_path:
     print("User canceled file selection.")
     exit()
 
-# --- Read CSV ---
 df = pd.read_csv(file_path)
-df.columns = df.columns.str.strip()  # remove leading/trailing spaces
-# --- Drop completely empty rows ---
-df = df.dropna(how='all')
+df.columns = df.columns.str.strip()
+df = df.dropna(how="all")
 
-# --- Rename columns ---
 df = df.rename(columns={
-    'Record ID': 'recordID',
-    'Date of Diary': 'date',
-    'Hour:': 'time',
-    'What kind of drink? (i.e. juice, water, milk, etc.)': 'drink',
-    'How much was drank (in oz)? ': 'dsize',
-    'How many times did you use the bathroom?': 'trip',
-    'How much urine?': 'amount',
-    'Accidental Leaks How much urine?': 'leak',
-    'Did you feel a strong urge to go?':'urge',
-    'What were you doing at the time?(i.e. sneezing, lifting, arriving home, sleeping, etc.)':'event'
+    "Record ID":                                                                    "recordID",
+    "Date of Diary":                                                                "date",
+    "Hour:":                                                                        "time",
+    "What kind of drink? (i.e. juice, water, milk, etc.)":                         "drink",
+    "How much was drank (in oz)?":                                                  "dsize",
+    "How many times did you use the bathroom?":                                     "trip",
+    "How much urine?":                                                              "amount",
+    "Accidental Leaks How much urine?":                                             "leak",
+    "Did you feel a strong urge to go?":                                            "urge",
+    "What were you doing at the time?(i.e. sneezing, lifting, arriving home, sleeping, etc.)": "event",
+    "How many pads were used this day?":                                            "pads",
+    "How many diapers were used this day?":                                         "diapers",
+    "Questions to ask my healthcare team:":                                         "questions",
 })
-# Convert 'trip' column to integers
-df['trip'] = pd.to_numeric(df['trip'], errors='coerce').fillna(0).astype(int)
 
-# --- Clean Hour column (remove leading apostrophe) ---
-df['time'] = df['time'].astype(str).str.replace("'", "")
+# Build sortable datetime from date + 24-hr start hour
+df["time"] = df["time"].astype(str).str.replace("'", "").str.strip() + " " + df["AM or PM"].astype(str).str.strip()
+df["trip"] = pd.to_numeric(df["trip"], errors="coerce").fillna(0).astype(int)
 
-# --- Consolidate Hour: and AM or PM into single column ---
-df['time'] = df['time'].astype(str).str.strip() + ' ' + df['AM or PM'].astype(str).str.strip()
+start_hours      = df["time"].str.split("-").str[0].str.strip()
+df["start_hour"] = pd.to_numeric(start_hours, errors="coerce")
+df["is_pm"]      = df["AM or PM"].str.upper() == "PM"
+df["start_hour_24"] = df["start_hour"].copy()
+df.loc[ df["is_pm"]  & (df["start_hour"] != 12), "start_hour_24"] += 12
+df.loc[~df["is_pm"]  & (df["start_hour"] == 12), "start_hour_24"]  = 0
 
-# --- Extract start hour safely ---
-start_hours = df['time'].str.split('-').str[0].str.strip()
-df['start_hour'] = pd.to_numeric(start_hours, errors='coerce')
+df["Date"]     = pd.to_datetime(df["date"], errors="coerce")
+df             = df.dropna(subset=["Date"])
+df["DateTime"] = df["Date"] + pd.to_timedelta(df["start_hour_24"], unit="h")
 
-# --- Convert 12-hour clock to 24-hour time ---
-df['is_pm'] = df['AM or PM'].str.upper() == 'PM'
-df['start_hour_24'] = df['start_hour']
-# PM (except 12 PM)
-df.loc[df['is_pm'] & (df['start_hour'] != 12), 'start_hour_24'] += 12
-# 12 AM -> 0
-df.loc[~df['is_pm'] & (df['start_hour'] == 12), 'start_hour_24'] = 0
+df_sorted = (
+    df.sort_values("DateTime")
+      .reset_index(drop=True)
+      .drop(columns=["start_hour", "is_pm", "start_hour_24", "DateTime", "Date", "AM or PM"])
+)
 
-# --- Convert Date column ---
-df['Date'] = pd.to_datetime(df['date'], errors='coerce')
-df = df.dropna(subset=['Date'])
 
-# --- Combine Date + Hour to datetime ---
-df['DateTime'] = df['Date'] + pd.to_timedelta(df['start_hour_24'], unit='h')
+# ── Fill PDFs ─────────────────────────────────────────────────────────────────
 
-# --- Sort chronologically ---
-df_sorted = df.sort_values('DateTime').reset_index(drop=True)
-
-# --- Drop helper columns ---
-df_sorted = df_sorted.drop(columns=['start_hour', 'is_pm', 'start_hour_24', 'DateTime', 'Date', 'AM or PM'])
-
-# --- Display sorted table ---
-#print(df_sorted)
-
-##########################################################################################################
-######## THIS PART OF THE CODE ADDS THE CSV TO THE PDF ###################################################
-# Get the folder where the current script is located
-script_folder = os.path.dirname(os.path.abspath(__file__))
-
-# Build the PDF template path relative to the script folder
-template_pdf_path = os.path.join(script_folder, "NIHdiary(editable).pdf")
-
-# Check if the template exists
+template_pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "NIHdiary(editable).pdf")
 if not os.path.exists(template_pdf_path):
-    print(f"Template PDF not found in script folder: {template_pdf_path}")
+    print(f"Template PDF not found: {template_pdf_path}")
     exit()
 
-# --- Helper: Convert time to 24-hour code ---
-def time_to_24hr_code(time_str):
-    m = re.match(r"(\d+)\s*-\s*(\d+)\s*(AM|PM)", time_str.strip(), re.IGNORECASE)
-    if not m:
-        return None
-    start, end, period = m.groups()
-    start, end = int(start), int(end)
-    period = period.upper()
-    if period == "AM":
-        start = 0 if start == 12 else start
-        end = 0 if end == 12 else end
-    else:
-        start = start if start == 12 else start + 12
-        end = end if end == 12 else end + 12
-    return f"{start:02d}{end:02d}"
-
-# --- Helper: Set radio button appearance (recursive) ---
-def set_radio_group(pdf, field_name, value):
-    for page in pdf.pages:
-        for annot in page.Annots or []:
-            if annot.Parent and annot.Parent.T:
-                name = annot.Parent.T[1:-1]
-
-                if name == field_name:
-                    export = PdfName(value)
-
-                    annot.Parent.V = export
-                    annot.AS = export
-
-# --- Use the sorted dataframe for the PDF step ---
 df = df_sorted.copy()
-
 df.columns = df.columns.str.strip()
-
-# Rename date column to match later code
 df["Date of Diary"] = pd.to_datetime(df["date"])
+df["time_full"]     = df["time"]
 
-# time column already exists, so just rename for the PDF logic
-df["time_full"] = df["time"]
+for col in ["drink", "event", "amount", "leak", "urge", "questions"]:
+    if col in df.columns:
+        df[col] = df[col].fillna("").astype(str).str.strip()
 
-# --- Fill PDFs per date ---
+for col in ["dsize", "trip", "pads", "diapers"]:
+    if col in df.columns:
+        df[col] = df[col].apply(clean_numeric)
+
 for date, group in df.groupby("Date of Diary"):
-    pdf = PdfReader(template_pdf_path)  # fresh copy per date
+    pdf = PdfReader(template_pdf_path)
 
+    # Day-level values
+    pads_rows     = group[group["pads"].str.strip()     != ""]
+    diapers_rows  = group[group["diapers"].str.strip()  != ""]
+    question_rows = group[group["questions"].str.strip() != ""]
+
+    day_pads     = int(float(pads_rows["pads"].iloc[0]))       if not pads_rows.empty     else ""
+    day_diapers  = int(float(diapers_rows["diapers"].iloc[0])) if not diapers_rows.empty  else ""
+    q_chunks     = split_text_for_pdf(question_rows["questions"].iloc[0]) if not question_rows.empty else ["", "", ""]
+    recordID     = f"AMPA-S{int(group['recordID'].iloc[0]):02d}"
+
+    # Row-level fields
     for _, row in group.iterrows():
         code = time_to_24hr_code(row["time_full"])
         if not code:
             continue
 
-        # --- PDF field keys ---
-        drink_key = f"drink{code}"
-        dsize_key = f"dsize{code}"
-        trip_key = f"trip{code}"
-        event_key = f"event{code}"
-        amount_key = f"amount{code}"
-        leak_key = f"leak{code}"
-        urge_yes_key = f"UrgeYes{code}"
-        urge_no_key = f"UrgeNo{code}"
-
-        date_key = "date"
-        recordID_key = "recordID"
-        day_pads_key = "day_pads"
-        day_diapers_key = "day_diapers"
-        healthcare_qs1_key = "healthcare_qs1"
-        healthcare_qs2_key = "healthcare_qs2"
-        healthcare_qs3_key = "healthcare_qs3"
+        field_map = {
+            f"drink{code}":    str(row.get("drink", "")),
+            f"dsize{code}":    str(row.get("dsize", "")),
+            f"trip{code}":     str(row.get("trip",  "")),
+            f"event{code}":    str(row.get("event", "")),
+        }
+        urge = row.get("urge", "").strip().upper()
 
         for page in pdf.pages:
             for annot in page.Annots or []:
@@ -155,85 +160,49 @@ for date, group in df.groupby("Date of Diary"):
                     continue
                 key = annot.T[1:-1]
 
-                # --- Text fields ---
-                if key == drink_key:
-                    annot.V = str(row.get("drink", ""))
-                    annot.AP = None
-                elif key == dsize_key:
-                    annot.V = str(row.get("dsize", ""))
-                    annot.AP = None
-                elif key == trip_key:
-                    annot.V = str(row.get("trip", ""))
-                    annot.AP = None
-                elif key == event_key:
-                    annot.V = str(row.get("event", ""))
-                    annot.AP = None
-                elif key == date_key:
-                    annot.V = row["Date of Diary"].strftime("%m/%d/%Y")
-                    annot.AP = None
-                elif key == recordID_key:
-                    annot.V = str(row.get("recordID", ""))
-                    annot.AP = None
-                elif key == day_pads_key:
-                    annot.V = str(row.get("day_pads", ""))
-                    annot.AP = None
-                elif key == day_diapers_key:
-                    annot.V = str(row.get("day_diapers", ""))
-                    annot.AP = None
-                elif key == healthcare_qs1_key:
-                    annot.V = str(row.get("healthcare_qs1", ""))
-                    annot.AP = None
-                elif key == healthcare_qs2_key:
-                    annot.V = str(row.get("healthcare_qs2", ""))
-                    annot.AP = None
-                elif key == healthcare_qs3_key:
-                    annot.V = str(row.get("healthcare_qs3", ""))
-                    annot.AP = None
+                if key in field_map:
+                    annot.V, annot.AP = field_map[key], None
 
-                # --- Checkboxes ---
-                elif key == urge_yes_key:
-                    if row.get("urge", "").strip().upper() == "YES":
-                        annot.V = PdfName("Yes")
-                        annot.AS = PdfName("Yes")
-                    else:
-                        annot.V = PdfName("Off")
-                        annot.AS = PdfName("Off")
-                elif key == urge_no_key:
-                    if row.get("urge", "").strip().upper() == "NO":
-                        annot.V = PdfName("Yes")
-                        annot.AS = PdfName("Yes")
-                    else:
-                        annot.V = PdfName("Off")
-                        annot.AS = PdfName("Off")
-         # --- Radio buttons ---
-        amount_value = row.get("amount")
-        leak_value = row.get("leak")
+                elif key == f"UrgeYes{code}":
+                    annot.V = annot.AS = PdfName("Yes" if urge == "YES" else "Off")
+                elif key == f"UrgeNo{code}":
+                    annot.V = annot.AS = PdfName("Yes" if urge == "NO"  else "Off")
 
-        amount_value = "" if pd.isna(amount_value) else str(amount_value).strip()
-        leak_value = "" if pd.isna(leak_value) else str(leak_value).strip()
+        # Radio buttons
+        for col, key_prefix in [("amount", f"amount{code}"), ("leak", f"leak{code}")]:
+            val = str(row.get(col, "")).strip()
+            if val in ("Small", "Medium", "Large"):
+                set_radio_group(pdf, key_prefix, val)
 
-        if amount_value in ["Small", "Medium", "Large"]:
-            set_radio_group(pdf, amount_key, amount_value)
+    # Day-level fields
+    day_fields = {
+        "day_pads":      str(day_pads),
+        "day_diapers":   str(day_diapers),
+        "healthcare_qs1": q_chunks[0],
+        "healthcare_qs2": q_chunks[1],
+        "healthcare_qs3": q_chunks[2],
+        "date":          row["Date of Diary"].strftime("%m/%d/%Y"),
+        "recordID":      recordID,
+    }
+    for page in pdf.pages:
+        for annot in page.Annots or []:
+            if annot.T and annot.T[1:-1] in day_fields:
+                annot.V, annot.AP = day_fields[annot.T[1:-1]], None
 
-        if leak_value in ["Small", "Medium", "Large"]:
-            set_radio_group(pdf, leak_key, leak_value)
-
-    # --- Ask user where to save PDF ---
-    recordID = group["recordID"].iloc[0]
+    # Save
     default_name = f"{recordID}_BladderDiary_{date.strftime('%Y%m%d')}.pdf"
     save_path = asksaveasfilename(
         title=f"Save PDF for {date.strftime('%Y-%m-%d')}",
         defaultextension=".pdf",
         initialfile=default_name,
-        filetypes=[("PDF files", "*.pdf")]
+        filetypes=[("PDF files", "*.pdf")],
     )
-
     if save_path:
         pdf.Root.AcroForm.update(PdfDict(NeedAppearances=PdfObject("true")))
         PdfWriter().write(save_path, pdf)
-        print("Saved")
     else:
         print(f"Skipped saving PDF for {date.strftime('%Y-%m-%d')}")
 
 csv_path = os.path.join(os.path.dirname(save_path), f"{recordID}_sorted.csv")
 df_sorted.to_csv(csv_path, index=False)
+print("All files saved.")
